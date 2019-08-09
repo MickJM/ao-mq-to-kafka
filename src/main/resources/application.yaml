@@ -1,0 +1,75 @@
+application:
+  debug: true
+spring:
+  main:
+    banner-mode: CONSOLE
+  banner:
+    location: banner.txt  
+kafka:
+  dest:
+    bootstrap:
+      servers1: 172.20.0.3:9092
+      servers: kafka-0.mh-nfaesozrbxarqnjfnzecnsr.eu-de.containers.appdomain.cloud:9093
+    username1: mmo275
+    password1: Passw0rd
+    username: token
+    password: D3CKp9bhZj58V0e3lTMBi1Y5zySNYGsb1_ReUabCMov0    
+    topic: mmo275topic
+# >>> not needed for cloud     
+    sasl:
+      mechanism1: SCRAM-SHA-256
+      mechanism: PLAIN
+      protocol: SASL_SSL
+      protocol1: SASL_PLAINTEXT
+# <<<
+    clientId: kafka-to-mq
+    login:
+      module: org.apache.kafka.common.security.scram.ScramLoginModule
+    login1:
+      module1: org.apache.kafka.common.security.plain.PlainLoginModule
+    truststore:
+      location: C:\Program Files\Java\jdk-10.0.1\lib\security\cacerts
+      location2: c:\Users\mickm\OneDrive\Documents\Development\Docker\kafka-to-mq\kafkaMQcerts
+      password: changeit
+  debug: true
+ibm:
+  mq:
+    queueManager: QMAP01
+    channel: MQ.TLS.SVRCONN
+    connName: localhost(1442)
+    sslCipherSpec: TLS_RSA_WITH_AES_256_CBC_SHA256
+    useSSL: true
+    user: 
+    password: 
+    queue: KAFKA.IN
+    mqmd:
+      rfh2: 
+        include: false
+      expiry: 600
+      messageType:
+# reqType ; 1 = REQUEST, 8 = DATAGRAM
+        reqType: 1
+        replyToQM: 
+        replyToQueue: MICK.OUT
+    security:
+      truststore1: c:\Users\mickm\OneDrive\Documents\Development\Docker\kafka-to-mq\kafkaMQcerts
+      keystore1: c:\Users\mickm\OneDrive\Documents\Development\Docker\kafka-to-mq\kafkaMQcerts
+      truststore-password1: changeit
+      keystore-password1: changeit      
+      truststore: C:\ProgramData\IBM\MQ\qmgrs\QMAP01\ssl\qmap01jks.jks
+      truststore-password: Passw0rd
+      keystore: C:\ProgramData\IBM\MQ\qmgrs\QMAP01\ssl\qmap01jks.jks
+      keystore-password: Passw0rd  
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      show-details: always        
+  security:
+    enabled: false
+server:
+  port:
+    8092
