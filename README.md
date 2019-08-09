@@ -1,1 +1,3 @@
-"# ao-mq-to-kafka" 
+# ao-mq-to-kafka
+
+Send MQ messages to Kafka 
