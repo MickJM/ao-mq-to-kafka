@@ -1,3 +1,3 @@
 # ao-mq-to-kafka
 
-Send MQ messages to Kafka 
+Send messages from IBM MQ to Kafka
