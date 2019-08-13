@@ -34,20 +34,25 @@ kafka:
   debug: true
 ibm:
   mq:
-    queueManager: QMAP01
+    queueManager: "*KAFKAMQ"
     channel: MQ.TLS.SVRCONN
-    connName: localhost(1442)
+    connName1: localhost(1442)
+    connName:
     sslCipherSpec: TLS_RSA_WITH_AES_256_CBC_SHA256
     useSSL: true
     user: 
     password: 
     queue: KAFKA.IN
+    retries:
+       maxAttempts: 3
+    useCCDT: true
+    ccdtFile: C:\ProgramData\IBM\MQ\qmgrs\QMAP01\@ipcc\AMQCLCHL.TAB        
     mqmd:
       rfh2: 
         include: false
       expiry: 600
-      messageType:
 # reqType ; 1 = REQUEST, 8 = DATAGRAM
+      messageType:
         reqType: 1
         replyToQM: 
         replyToQueue: MICK.OUT

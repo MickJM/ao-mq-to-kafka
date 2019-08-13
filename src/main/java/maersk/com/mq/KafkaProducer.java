@@ -21,7 +21,6 @@ public class KafkaProducer {
 	@Value("${application.debug:true}")
 	private boolean _debug;
 	
-	//@Value("${spring.kafka.bootstrap-servers:}")	
 	// Get all the parameters
 	@Value("${kafka.dest.bootstrap.servers:}")
 	private String destBootstrapServers;
@@ -41,6 +40,12 @@ public class KafkaProducer {
 	private String destTruststorePassword;
 	@Value("${kafka.dest.linger:1}")
 	private int destLinger;
+	@Value("${kafka.dest.transaction.timeout:5000}")
+	private int destTransactionTimeout;
+	@Value("${kafka.dest.block:5000}")
+	private int destBlockMS;
+	@Value("${kafka.dest.acks:1}")
+	private String destAcks;
 
 	@Value("${spring.application.name:kafka-producer}")
 	private String clientId;
@@ -57,13 +62,21 @@ public class KafkaProducer {
 		properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		properties.put(ProducerConfig.LINGER_MS_CONFIG, destLinger);
 
-		properties.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, "5000");
-		properties.put("client.id", this.clientId);
+		properties.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, destTransactionTimeout);
+		properties.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, destBlockMS);
+		properties.put(ProducerConfig.ACKS_CONFIG,destAcks);
+		properties.put(ProducerConfig.CLIENT_ID_CONFIG,this.clientId);
+		
+		//properties.put("client.id", this.clientId);
 		//properties.put(ProducerConfig.CLIENT_ID_CONFIG, "kafka-producer");
-		properties.put("transaction.timeout.ms", 5000);
-		properties.put("max.block.ms", 5000);
-		properties.put("acks", "1");
-		log.info("*************** Starting producer");
+		//properties.put("transaction.timeout.ms", 5000);
+		//properties.put("max.block.ms", 5000);
+		//properties.put("acks", "1");
+		if (this._debug) {
+			log.info("******* eyecatcherS");
+			log.info("Starting producer");
+		}
+		
 		/*
 		 * Testing using embedded
 		 */
