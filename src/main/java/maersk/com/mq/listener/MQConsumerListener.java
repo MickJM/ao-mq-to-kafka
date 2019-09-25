@@ -1,16 +1,27 @@
 package maersk.com.mq.listener;
 
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.util.concurrent.ListenableFuture;
 import org.springframework.util.concurrent.ListenableFutureCallback;
@@ -24,8 +35,11 @@ import com.ibm.mq.MQQueue;
 import com.ibm.mq.MQQueueManager;
 import com.ibm.mq.constants.MQConstants;
 import com.ibm.mq.headers.MQDataException;
+import com.ibm.mq.headers.MQRFH2;
 
+import maersk.com.kafka.constants.MQKafkaConstants;
 import maersk.com.mq.KafkaProducer;
+import maersk.com.mq.SendToKafkaTask;
 
 @Component
 public class MQConsumerListener implements Runnable {
@@ -34,18 +48,14 @@ public class MQConsumerListener implements Runnable {
 	private Thread worker;
 	private AtomicBoolean running = new AtomicBoolean(false);
 
-	private int interval;
+	private int maxAttempts;	
 
 	private MQConnection conn;
-	public void setConnection(MQConnection val) {
+	public void setConnection(MQConnection val, int maxAttempts) {
 		this.conn = val;
+		this.maxAttempts = maxAttempts;
 	}
 	
-	//private MQQueueManager queManager;
-	//public void setQueueManager(MQQueueManager val) {
-	//	this.queManager = val;
-	//}
-
 	private KafkaTemplate<String, String> kafkaTemplate;
 	public void setKafkaTemplate(KafkaTemplate<?,?> val) {
 		this.kafkaTemplate = (KafkaTemplate<String, String>) val;
@@ -61,12 +71,12 @@ public class MQConsumerListener implements Runnable {
 		this._debug = val;
 	}
 
-	//private MQQueue queue;
-	//private MQGetMessageOptions gmo;
+	private ThreadPoolExecutor executor;
+	private int threadPool;
+	public void setThreadPool(int val) {
+		this.threadPool = val;
+	}
 	
-
-	//public MQConsumerListener(MQConnection conn, MQQueueManager qm, MQQueue q, KafkaTemplate<String, String> kt) {
-
 	public MQConsumerListener() {
 	}
 	
@@ -103,43 +113,35 @@ public class MQConsumerListener implements Runnable {
 	@Override
 	public void run() {
 	
-		if (this._debug) { log.info("Starting MQConsumerListener " ); }
+		if (this._debug) { log.info("Starting MQConsumerListener " ); }		
+		if (this._debug) { log.info("Cresting " + this.threadPool + " fixed threadpools" ); }		
+		this.executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(this.threadPool);
+		
 		running.set(true);
-
-		/*
-		MQGetMessageOptions gmo = new MQGetMessageOptions();
-		gmo.options = MQConstants.MQGMO_WAIT 
-				+ MQConstants.MQGMO_FAIL_IF_QUIESCING 
-				+ MQConstants.MQGMO_CONVERT
-				+ MQConstants.MQGMO_SYNCPOINT
-				+ MQConstants.MQGMO_PROPERTIES_IN_HANDLE;
-		
-		// wait until we get something
-		gmo.waitInterval = 5000;
-		*/
-		
-		/*
-		try {
-			AttemptToReconnect();
-		
-		} catch (MQException | MQDataException e1) {
-			log.error("Unable to connect to queue manager ");
-			e1.printStackTrace();
-		}
-		*/
-		
-		// Open the queue for reading
-		//this.queue = this.conn.openQueueForReading();
-		//MQMessage msg = null;
 		MQMessage msg = null;
-		//while (isRunning()) {
 		while (running.get()) {
 	
             try { 
     			try {
-    				msg = this.conn.getMessage();    				
-    				if (msg != null) {
-    					sendMessageToKafka(msg);
+    				if (this.conn.isConnected()) {
+	    				msg = this.conn.getMessage();    	
+	    				
+	    				/*
+	    				 * If we have process the message 'x' number of time and it is now
+	    				 * ... over the threshhold, forget it and put it to the backout queue
+	    				 */
+	    				if (msg != null) {
+	    					this.conn.setBackoutQueueDetails();
+
+	    					if (msg.backoutCount > this.conn.getBackoutThreshhold()) {
+	    						writeMessageToBackoutQueue(msg);
+	    					
+	    					} else {
+	    						sendAsyncToKafka(msg);
+	    						if (this._debug) { log.info(">>>>>>>>>>>>>>>>> message sent"); }
+	    					}
+	    				}
+	    				msg = null;
     				}
     				
     			} catch (MQException  e) {
@@ -165,25 +167,48 @@ public class MQConsumerListener implements Runnable {
     						attemptToReconnect();
     						
     					} else {
-    						log.error("Unhandled MQException : reasonCode " + e.reasonCode );
-    						log.error("Exception : " + e.getMessage() );
-    						sendToDLQ(msg);
-    						//System.exit(1);
+    						/*
+    						 * If the error is anything but 2195 (Unexpected), then try to capture it
+    						 * ... otherwise, we are most likely stopping
+    						 */
+    						if (e.reasonCode != MQConstants.MQRC_UNEXPECTED_ERROR) {
+	    						log.error("Unhandled MQException : reasonCode " + e.reasonCode );
+	    						log.error("Exception : " + e.getMessage() );
+	    						System.exit(MQKafkaConstants.EXIT);
+	    						//if (this.conn.isConnected()) {
+	    						//	if (msg != null) {
+	    						//		sendToDLQ(msg);
+	    						//	}
+	    						}
+    						}
     					}
     				}
     				
     			} catch (Exception e) {
     				log.error("Unhandled Exception procesing MQ messages : " + e.getMessage() );
-    				sendToDLQ(msg);
-    				//System.exit(1);
+    				if (this.conn.isConnected()) {
+						if (msg != null) {
+							try {
+								rollBack();
+								
+							} catch (MQException e1) {
+							}
+						}
+					}
+    				//System.exit(MQKafkaConstants.EXIT);
     			}
 
+            /*
             } catch (Exception e) {
                 Thread.currentThread().interrupt();
                 log.error("Thread was interrupted, Failed to complete operation");
                 log.error("Exception: " + e.getMessage());
 				try {
-					sendToDLQ(msg);
+					if (this.conn.isConnected()) {
+						if (msg != null) {
+							sendToDLQ(msg);
+						}
+					}
 					
 				} catch (MQDataException e1) {
 					e1.printStackTrace();
@@ -193,6 +218,7 @@ public class MQConsumerListener implements Runnable {
 					e1.printStackTrace();
 				}
             }
+            */
          } 		
 	}
 	
@@ -201,8 +227,8 @@ public class MQConsumerListener implements Runnable {
 	 */
 	private void attemptToReconnect()  {
 
-		int maxAttempts = 3;
-		int attempts = 1;
+		int maxAttempts = this.maxAttempts;
+		int attempts = MQKafkaConstants.REPROCESS_MSG_INIT;
 		
 		while (attempts <= maxAttempts) {
 			try {
@@ -222,25 +248,107 @@ public class MQConsumerListener implements Runnable {
 	}
 
 	/*
+	 * Send messages async to Kafka 
+	 */
+	private void sendAsyncToKafka(MQMessage msg) throws MQException {
+		
+		try {
+			sendMessageToKafka(msg);
+			
+		} catch (IOException | MQException | InterruptedException | ExecutionException e) {
+			log.error("Unable to successfully process async request");
+			rollBack();
+		}
+	}
+	
+	/*
 	 * Send the message to Kafka ...
 	 * 
 	 */
-	private void sendMessageToKafka(MQMessage msg) throws IOException {
+	private void sendMessageToKafka(MQMessage msg) throws IOException, MQException, InterruptedException, ExecutionException {
 		byte[] message = new byte[msg.getMessageLength()];
 		msg.readFully(message);    				
 
 		String payload = new String(message);
 		if (_debug) { log.info("msg : " + payload); }
 		
+		// https://stackoverflow.com/questions/23681822/using-spring-4-0s-new-listenablefuture-with-callbacks-odd-results
+		
+		//Try getting the RFH2 details from the properties on the MQmessage
+		// ... probably not the best way, but works for this ..
+		Map rfh2 = getRFHProperties(msg);
+		
+		SendToKafkaTask t = new SendToKafkaTask(payload);
+		t.setKafkaTemplate(this.kafkaTemplate);
+		t.setMQConnection(this.conn);
+		t.setTopicName(this.topicName);
+		t.setRFH2Headers(rfh2);
+		
+		////Future<Integer> res = this.executor.submit(t);
+		this.executor.submit(t);
+		
+		//int result = res.get();
+		//if (result == 0) {
+		//	successfullSend();
+		//
+		//} else {
+		//	processFailures();
+		//}	
+		
+		//if (result == 0) {
+		//	successfullSend();
+		//} else {
+		//	
+		//}
+		
+		//if (_debug) { try {
+		//	log.info("res : " + res.get());
+		
+		//} catch (InterruptedException | ExecutionException e) {
+			// TODO Auto-generated catch block
+		//	e.printStackTrace();
+		//} }
+		
+		//executor.submit(t);
+		
+		//try {
+		//	successfullSend();
+		//} catch (MQException e) {
+		//	// TODO Auto-generated catch block
+		//	e.printStackTrace();
+		//}
+		
+		/*
+		boolean sim = tru
+		if (sim) {
+			log.info("Sleeping for 2 seconds :" + Thread.currentThread().getName());
+			try {
+				Thread.sleep(2000);
+			} catch (InterruptedException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+		*/
+		
+		/*
 		ListenableFuture<SendResult<String,String>> future =
-				kafkaTemplate.send(this.topicName, payload);
-
+								kafkaTemplate.send(this.topicName, payload);		
+		
 		future.addCallback(new ListenableFutureCallback<SendResult<String,String>>() {
-			
 			@Override
 			public void onSuccess(SendResult<String,String> sendResult) {		
-				successfullSend();
-				
+				try {
+					successfullSend();
+					
+				} catch (MQException e) {
+					try {
+						rollBack();
+						
+					} catch (MQException e1) {
+						log.error("Unable to commit transaction to MQ after successfully sending messages to Kafka");
+					}
+				}				
 			}
 
 			@Override
@@ -249,12 +357,12 @@ public class MQConsumerListener implements Runnable {
 				try {
 					processFailures(ex, msg);
 
-				} catch (MQException e) {
-					log.warn("Unable to commit message to DLQ : reasonCode " + e.reasonCode );
+				} catch (MQException e ) {
+					log.warn("Unable to commit message to DLQ : reasonCode " + e.getReason() );
 					log.warn("Message : " + e.getMessage() );
 	
 				} catch (MQDataException e) {
-					log.warn("Unable to commit message to DLQ : reasonCode " + e.reasonCode );
+					log.warn("Unable to commit message to DLQ : reasonCode " + e.getReason() );
 					log.warn("Message : " + e.getMessage() );
 					
 				} catch (IOException e) {
@@ -264,37 +372,87 @@ public class MQConsumerListener implements Runnable {
 				}
 			}
 		});
+		*/
+		if (this._debug) { log.info("************* message is being processed *********************"); }
+	}
+	
+	/*
+	 * Get the RFH2 details
+	 */
+	private Map<String,String> getRFHProperties(MQMessage msg) {
+		
+		Map<String,String> rfh2 = new HashMap<String, String>();
+		
+		String rfh2TopicName= null;
+		try {
+			rfh2TopicName = msg.getStringProperty("usr.source-topic");
+			rfh2.put("source-topic", rfh2TopicName.trim());
+			
+		} catch (Exception e) {	
+			if (this._debug) { log.info("source-topic properties does not exist in the MQRFH2"); }
+		}
+
+		String rfh2Key = null;
+		try {
+			rfh2Key = msg.getStringProperty("usr.key");
+			rfh2.put("key", rfh2Key.trim());
+		
+		} catch (Exception e) {	
+			if (this._debug) { log.info("key properties does not exist in the MQRFH2"); }
+		}
+		
+		return rfh2;
 		
 	}
-	
 
 	/*
-	 * Messages was successfully sent to Kafka, so commit the messages from the queue
+	 * Message was successfully sent to Kafka, so commit the messages from the queue
 	 */
-	protected void successfullSend() {
+	protected synchronized void successfullSend() throws MQException {
 		if (_debug) { log.info("message successfully sent " ); }
-		try {
-			this.conn.commit();
-			
-		} catch (MQException e) {
-			log.error("Unable to commit transaction to MQ after successfully sending messages to Kafka");
-		}
+		this.conn.commit();
 	}
 	
+	
 	/*
-	 * Called from ListenableFutureCallback
-	 * ... send to DLQ
+	 * failure, rollback
 	 */
-	protected void processFailures(Throwable ex, MQMessage msg) throws MQDataException, IOException, MQException {
-		if (_debug) { log.error("Unable to send message to Kafka : " + ex.getMessage()); }
-		sendToDLQ(msg);
+	protected synchronized void processFailures(Throwable ex, MQMessage msg) throws MQDataException, IOException, MQException {
+		if (_debug) { log.error("Unable to send message to Kafka : " + ex.getMessage()); }	
+		rollBack();
+	}
+	protected synchronized void processFailures(Throwable ex) throws MQDataException, IOException, MQException {
+		if (_debug) { log.error("Unable to send message to Kafka : " + ex.getMessage()); }	
+		rollBack();
+	}
+	protected synchronized void processFailures() throws MQException {
+		if (_debug) { log.error("Unable to send message to Kafka " ); }	
+		rollBack();
+	}
+
+	/*
+	 * failure, rollback
+	 */	
+	protected synchronized void rollBack() throws MQException {
+		this.conn.rollBack();
+	}
+
+	/*
+	 * Send to BOQ
+	 */
+	private synchronized void writeMessageToBackoutQueue(MQMessage msg) throws MQDataException, IOException, MQException {
+		if (_debug) { log.error("Attempting to write message to the backout queue" ); }	
+		this.conn.writeMessageToBackoutQueue(msg);
+		this.conn.commit();
+		
 	}
 
 	/*
 	 * Send to DLQ
 	 */
-	private void sendToDLQ(MQMessage msg) throws MQDataException, IOException, MQException {
-		this.conn.WriteMessageToDLQ(msg);
+	private synchronized void sendToDLQ(MQMessage msg) throws MQDataException, IOException, MQException {
+		if (_debug) { log.error("Attempting to write messages to the DLQ" ); }	
+		this.conn.writeMessageToDLQ(msg);
 		this.conn.commit();
 		
 	}

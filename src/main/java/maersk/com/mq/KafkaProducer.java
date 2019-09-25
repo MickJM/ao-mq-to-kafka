@@ -1,15 +1,28 @@
 package maersk.com.mq;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -47,43 +60,37 @@ public class KafkaProducer {
 	@Value("${kafka.dest.acks:1}")
 	private String destAcks;
 
-	@Value("${spring.application.name:kafka-producer}")
+	@Value("${application.name:kafka-producer}")
 	private String clientId;
 
+	@Autowired
+	private KafkaTemplate<String, String> kafkaTemplate;
 	
 	@Bean
 	public ProducerFactory<Object, Object> producerFactory() {
 		
-		//LoadRunTimeParameters();
-		
 		Map<String, Object> properties = new HashMap<>();
-		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, destBootstrapServers);
+		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, this.destBootstrapServers);
 		properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-		properties.put(ProducerConfig.LINGER_MS_CONFIG, destLinger);
-
-		properties.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, destTransactionTimeout);
-		properties.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, destBlockMS);
-		properties.put(ProducerConfig.ACKS_CONFIG,destAcks);
-		properties.put(ProducerConfig.CLIENT_ID_CONFIG,this.clientId);
+		properties.put(ProducerConfig.LINGER_MS_CONFIG, this.destLinger);
+		properties.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, this.destTransactionTimeout);
+		properties.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, this.destBlockMS);
+		properties.put(ProducerConfig.ACKS_CONFIG, this.destAcks);
 		
-		//properties.put("client.id", this.clientId);
-		//properties.put(ProducerConfig.CLIENT_ID_CONFIG, "kafka-producer");
-		//properties.put("transaction.timeout.ms", 5000);
-		//properties.put("max.block.ms", 5000);
-		//properties.put("acks", "1");
-		if (this._debug) {
-			log.info("******* eyecatcherS");
-			log.info("Starting producer");
+        properties.put(ProducerConfig.CLIENT_ID_CONFIG, this.clientId);
+        try {
+			properties.put(ProducerConfig.CLIENT_ID_CONFIG, InetAddress.getLocalHost().getHostName());
+
+        } catch (UnknownHostException e) {
+			// do nothing ....
 		}
 		
-		/*
-		 * Testing using embedded
-		 */
-		//properties.put(ProducerConfig.PARTITIONER_CLASS_CONFIG,
-		//		"org.apache.kafka.clients.producer.internals.DefaultPartitioner");
+		if (this._debug) {
+			log.info("******* eyecatcher *******");
+			log.info("Starting producer");
+		}
 				
-		
 		addSaslProperties(properties, destSaslMechanism, destLoginModule, destUsername, destPassword, destSaslProtocol);
 		addTruststoreProperties(properties, destTruststoreLocation, destTruststorePassword);
 

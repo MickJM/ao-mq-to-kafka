@@ -3,6 +3,13 @@ package maersk.com.mq.listener;
 import java.io.IOException;
 import java.net.URL;
 import java.util.Hashtable;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -27,9 +34,14 @@ import com.ibm.mq.MQMessage;
 import com.ibm.mq.MQPutMessageOptions;
 import com.ibm.mq.MQQueue;
 import com.ibm.mq.MQQueueManager;
+import com.ibm.mq.constants.CMQC;
 import com.ibm.mq.constants.MQConstants;
+import com.ibm.mq.headers.MQDLH;
 import com.ibm.mq.headers.MQDataException;
+import com.ibm.mq.headers.MQHeaderList;
+import com.ibm.mq.headers.MQRFH2;
 
+import maersk.com.kafka.constants.MQKafkaConstants;
 import maersk.com.mq.KafkaProducer;
 
 
@@ -38,6 +50,9 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 
 	private Logger log = Logger.getLogger(this.getClass());
 
+	@Value("${application.debug:false}")
+    private boolean _debug;
+	
 	@Value("${ibm.mq.queuemanager}")
 	private String queueManager;
 	
@@ -65,13 +80,13 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 	private String password;
 	@Value("${ibm.mq.sslCipherSpec}")
 	private String cipher;
-
+	@Value("${ibm.mq.waitInterval:5000}")
+	private int waitInterval;
+    @Value("${ibm.mq.retries.maxAttempts:3}")
+	private int maxAttempts;	
 	//
 	@Value("${ibm.mq.useSSL}")
 	private boolean bUseSSL;
-	
-	@Value("${application.debug:false}")
-    private boolean _debug;
 	
 	@Value("${ibm.mq.security.truststore}")
 	private String truststore;
@@ -82,10 +97,19 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 	@Value("${ibm.mq.security.keystore-password}")
 	private String keystorepass;
 	
+    @Value("${ibm.mq.mqmd.rfh2.include:false}")
+	private boolean includeRFH2;  
+	
 	@Value("${kafka.dest.topic}")
 	private String topicName;
+
+	@Value("${kafka.dest.threadpool:1}")
+	private int threadPool;
 	
 	private String dlqName;
+	
+	private static MQQueue dlqQueue = null;
+	private static MQQueue boqQueue = null;
 	
 	private MQQueue queue;
 	private MQQueueManager queManager;
@@ -93,22 +117,33 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		return this.queManager;
 	}
 	
-	
 	private MQGetMessageOptions gmo;
 	private MQConsumerListener listener;
 	
 	@Autowired
 	private KafkaTemplate<String, String> kafkaTemplate;
+	
+	private int backoutThreashhold;
+	public int getBackoutThreshhold() {
+		return this.backoutThreashhold;
+	}
+	private String backoutQueue;
+	public String getBackoutQueue() {
+		return this.backoutQueue;
+	}
+	
 
 	public MQConnection() {
 	}
 
+	public boolean isConnected() {
+		return this.queManager.isConnected();
+	}
 	/*
 	 * Called from MQConsumerListener to reconnect to the queue manager
 	 */
 	public void reConnectToTheQueueManager() throws MQException, MQDataException, Exception {
 		this.queManager = createQueueManagerConnection();
-		//return qm;
 	}
 	
 	/*
@@ -211,88 +246,23 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 				+ MQConstants.MQGMO_CONVERT
 				+ MQConstants.MQGMO_SYNCPOINT
 				+ MQConstants.MQGMO_PROPERTIES_IN_HANDLE;
+		/*
+		 * if we want to process the MQRFH2 header
+		 */
+		if (this.includeRFH2) {
+				this.gmo.options += MQConstants.MQGMO_PROPERTIES_FORCE_MQRFH2;
+		}
 		
 		// wait until we get something
-		this.gmo.waitInterval = 5000;
+		this.gmo.waitInterval = this.waitInterval;
 
 		this.dlqName = this.queManager.getAttributeString(MQConstants.MQCA_DEAD_LETTER_Q_NAME, 48).trim();
 		this.queue = openQueueForReading(this.srcQueue);
+		//getBackoutQueueDetails(this.queue);
 		
 		return queManager;
 	}
 
-	
-	//@Bean 
-	//@DependsOn("queuemanager")
-	public MQQueue openQueueForReading(String qName) {
-		
-		if (this._debug) { log.info("Opening queue " + qName + " for writing"); }
-		
-		MQQueue inQueue = null;
-		int openOptions = MQConstants.MQOO_FAIL_IF_QUIESCING 
-				+ MQConstants.MQOO_INQUIRE 
-				+ MQConstants.MQOO_INPUT_SHARED;
-
-		try {
-			inQueue = this.queManager.accessQueue(srcQueue, openOptions);
-			if (this._debug) { log.info("Queue : " + qName + " opened"); }
-			
-		} catch (MQException e) {
-			log.error("Unable to open queue : " + qName);
-			log.error("Message : " + e.getMessage() );
-			System.exit(1);
-		}
-			
-		return inQueue;
-		
-	}
-	
-	public MQMessage getMessage() throws MQException {
-		MQMessage msg = new MQMessage();
-		this.queue.get(msg, this.gmo);
-		return msg;
-	}
-
-	public void commit() throws MQException {
-		this.queManager.commit();
-	}
-
-	/*
-	 * if we get an error writing to a queue, try writing it to the DLQ
-	 */
-	public void WriteMessageToDLQ(MQMessage message) throws MQDataException, IOException {
-
-		MQPutMessageOptions pmo = new MQPutMessageOptions();	
-		pmo.options = MQConstants.MQPMO_NEW_MSG_ID + MQConstants.MQPMO_FAIL_IF_QUIESCING;
-		message.expiry = -1;
-
-		MQQueue dlqQueue = null;
-		try {
-			dlqQueue = openQueueForReading(this.dlqName);	
-			dlqQueue.put(message,pmo);
-			log.warn("Message written to DLQ");
-			
-		} catch (MQException e) {
-			log.error("Error writting to DLQ " + this.dlqName);
-			log.error("Reason : " + e.reasonCode + " Description : " + e.getMessage());			
-						
-		} catch (Exception e) {
-			log.error("Error writting to DLQ " + this.dlqName);
-			log.error("Description : " + e.getMessage());
-
-		} finally {
-			try {
-				if (dlqQueue != null) {
-					dlqQueue.close();
-				}	
-				
-			} catch (MQException e) {
-				log.warn("Error closing DLQ " + this.dlqName);
-			}
-		}
-		
-	}
-	
 	/*
 	 * Override the onApplicationEvent, so we can create an MQ listener when we know that this
 	 *    object has been fully created
@@ -305,18 +275,188 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 	}
 
 	/*
-	 * Create an MQConnectionListener object to process MQ messages
+	 * Try and get the BOQ details from the queue that is being read
+	 * ... there does not have to be a BOQ configured to the queue
+	 */
+	public void setBackoutQueueDetails() {
+		getBackoutQueueDetails(this.queue);
+	}
+	
+	/*
+	 * Get the BOQ name and BOQ threshhold value
+	 */
+	private void getBackoutQueueDetails(MQQueue queue) {
+
+		// Get backout queue and threshold values
+		int[] query = {MQConstants.MQIA_BACKOUT_THRESHOLD, MQConstants.MQCA_BACKOUT_REQ_Q_NAME };
+		int[] outi = new int[1];
+		byte[] outb = new byte[48];
+		
+		try {
+			if (queue.getQueueType() == MQConstants.MQQT_ALIAS) {
+				int[] basequery = {MQConstants.MQCA_BASE_Q_NAME };
+				int[] baseouti = new int[1];
+				byte[] baseoutb = new byte[48];
+				queue.inquire(basequery, baseouti, baseoutb);
+				String queueName = new String(baseoutb).trim();
+				
+				MQQueue basequeue = openQueueForReading(queueName);
+				basequeue.inquire(query, outi, outb);
+				basequeue.close();
+				
+			} else {
+				queue.inquire(query, outi, outb);
+				
+			}
+
+			this.backoutThreashhold = outi[0];
+			this.backoutQueue = new String(outb).trim();
+
+		} catch (MQException e) {
+			this.backoutQueue = null;
+			this.backoutThreashhold = 1;
+		}
+		
+		
+	}
+
+	/*
+	 * Open a queue for reading
+	 */
+	public MQQueue openQueueForReading(String qName) {
+		
+		if (this._debug) { log.info("Opening queue " + qName + " for reading"); }
+		
+		MQQueue inQueue = null;
+		int openOptions = MQConstants.MQOO_FAIL_IF_QUIESCING 
+				+ MQConstants.MQOO_INQUIRE 
+				+ MQConstants.MQOO_INPUT_SHARED;
+
+		try {
+			inQueue = this.queManager.accessQueue(qName, openOptions);
+			if (this._debug) { log.info("Queue : " + qName + " opened"); }
+			
+		} catch (MQException e) {
+			log.error("Unable to open queue : " + qName);
+			log.error("Message : " + e.getMessage() );
+			System.exit(MQKafkaConstants.EXIT);
+		}
+			
+		return inQueue;
+		
+	}
+	
+	/*
+	 * Open a queue for writing
+	 */
+	public MQQueue openQueueForWriting(String queueName) throws MQException {
+
+		MQQueue queue = null;
+		int openOptions = MQConstants.MQOO_FAIL_IF_QUIESCING 
+				+ MQConstants.MQOO_OUTPUT ;
+		queue = this.queManager.accessQueue(queueName, openOptions);
+		return queue;
+	}
+	
+	public MQMessage getMessage() throws MQException {
+		MQMessage msg = new MQMessage();
+		this.queue.get(msg, this.gmo);
+		return msg;
+	}
+	
+	public void closeQueue() {
+		try {
+			this.boqQueue.close();
+		} catch (Exception e) {
+			//
+		}
+		this.boqQueue = null;
+	}
+
+	public void begin() throws MQException {
+		this.queManager.begin();
+	}
+	
+	public void commit() throws MQException {
+		this.queManager.commit();
+	}
+
+	public void rollBack() throws MQException {
+		this.queManager.backout();
+	}
+
+	/*
+	 * Write the BOQ
+	 */
+	public void writeMessageToBackoutQueue(MQMessage message) throws MQDataException, IOException{
+
+		MQPutMessageOptions pmo = new MQPutMessageOptions();	
+		pmo.options = MQConstants.MQPMO_NEW_MSG_ID + MQConstants.MQPMO_FAIL_IF_QUIESCING;
+		message.expiry = MQKafkaConstants.UNLIMITED_EXPIRY;
+		//MQQueue boqQueue = null;
+		try {
+			if (this.boqQueue == null) { 
+				this.boqQueue = openQueueForWriting(this.backoutQueue);
+			}
+			this.boqQueue.put(message,pmo);
+			log.warn("Message written to BackoutQueue: " + this.backoutQueue);
+			
+		} catch (MQException e) {
+			log.error("Error writting to BOQ " + this.backoutQueue);
+			log.error("Reason : " + e.reasonCode + " Description : " + e.getMessage());			
+			writeMessageToDLQ(message);
+			
+		} catch (Exception e) {
+			log.error("Error writting to BOQ " + this.backoutQueue);
+			log.error("Description : " + e.getMessage());
+			writeMessageToDLQ(message);
+			
+		} finally {
+			closeQueue();
+		}
+
+	}
+	
+	/*
+	 * if we get an error writing to a queue, try writing it to the DLQ
+	 */
+	public void writeMessageToDLQ(MQMessage message) throws MQDataException, IOException {
+
+		MQPutMessageOptions pmo = new MQPutMessageOptions();	
+		pmo.options = MQConstants.MQPMO_NEW_MSG_ID + MQConstants.MQPMO_FAIL_IF_QUIESCING;
+		message.expiry = MQKafkaConstants.UNLIMITED_EXPIRY;
+
+		try {
+			if (this.dlqQueue == null) {
+				this.dlqQueue = openQueueForWriting(this.dlqName);
+			}
+			this.dlqQueue.put(message,pmo);
+			log.warn("Message written to DLQ : " + this.dlqName);
+			
+		} catch (MQException e) {
+			log.error("Error writting to DLQ " + this.dlqName);
+			log.error("Reason : " + e.reasonCode + " Description : " + e.getMessage());			
+						
+		} catch (Exception e) {
+			log.error("Error writting to DLQ " + this.dlqName);
+			log.error("Description : " + e.getMessage());
+
+		}
+		
+	}
+	
+	/*
+	 * Create an MQConnection listener object to process MQ messages
 	 */
 	protected void createMQListenerObject() {
-
+		if (this._debug) {log.info("Creating MQ Listener object ...."); }
 		this.listener = new MQConsumerListener();
-		this.listener.setConnection(this);
-		//this.listener.setQueueManager(this.queManager);
+		this.listener.setConnection(this, this.maxAttempts);
 		this.listener.setKafkaTemplate(this.kafkaTemplate);
 		this.listener.setTopicName(this.topicName);
-		this.listener.setDebug(this._debug);		
+		this.listener.setDebug(this._debug);
+		this.listener.setThreadPool(this.threadPool);
 		this.listener.start();
-		
 		if (this._debug) {log.info("MQ Listener started ...."); }
 		
 	}
@@ -334,7 +474,7 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		 */
 		if (this.useCCDT && (!this.connName.equals(""))) {
 			log.error("The use of MQ CCDT filename and connName are mutually exclusive");
-			System.exit(1);
+			System.exit(MQKafkaConstants.EXIT);
 		}
 		if (this.useCCDT) {
 			return;
@@ -349,18 +489,18 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 				this.port = Integer.parseInt(matcher.group(2).trim());
 			} else {
 				log.error("While attempting to connect to a queue manager, the connName is invalid ");
-				System.exit(1);				
+				System.exit(MQKafkaConstants.EXIT);				
 			}
 		} else {
 			log.error("While attempting to connect to a queue manager, the connName is missing  ");
-			System.exit(1);
+			System.exit(MQKafkaConstants.EXIT);
 			
 		}
 
 	}
 	
 	/*
-	 * Check the user, if its passed in 
+	 * Check the user, if its in the configuration file, pass it in 
 	 */
 	private void validateUser() {
 
@@ -372,7 +512,7 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		if (!this.userId.equals("")) {
 			if ((this.userId.equals("mqm") || (this.userId.equals("MQM")))) {
 				log.error("The MQ channel USERID must not be running as 'mqm' ");
-				System.exit(1);
+				System.exit(MQKafkaConstants.EXIT);
 			}
 		} else {
 			this.userId = null;
@@ -403,6 +543,29 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
     	}
     }
 
+
+    /*
+    @Bean
+    public ScheduledExecutorService threadPool() {
+    	
+	    RejectedExecutionHandler rejectionHandler = new RejectedExecutionHandlerImp();
+	    ThreadFactory threadFactory = Executors.defaultThreadFactory();
+
+	    ThreadPoolExecutor executorPool = new ThreadPoolExecutor(5,5,5,
+	    		TimeUnit.SECONDS, 
+	    		new ArrayBlockingQueue<Runnable>(5), 
+	    		threadFactory, rejectionHandler);
+	    ScheduledExecutorService schedexecutorPool = Executors.newScheduledThreadPool(5); 
+    	return schedexecutorPool;
+    }
 	
-	
+	public class RejectedExecutionHandlerImp implements RejectedExecutionHandler {
+
+		@Override
+		public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
+			//System.out.println("Info: " + r.toString() + " is rejected");
+		}
+		
+	}
+	*/
 }
