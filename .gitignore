@@ -34,3 +34,5 @@ build/
 *.yml
 *.yaml
 /FFDC
+src\main\resources\*.yaml
+src\main\resources\*.yml
