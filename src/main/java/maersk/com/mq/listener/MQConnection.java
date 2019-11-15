@@ -55,29 +55,51 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 	
 	@Value("${ibm.mq.queuemanager}")
 	private String queueManager;
+	public String GetQueueManagerName() { return this.queueManager; }
+	public void SetQueueManagerName(String val) { this.queueManager = val; }
 	
 	// taken from connName
 	private String hostName;
-
+	public String GetHostName() { return this.hostName; }
+	public void SetHostName(String val) { this.hostName = val; }
+	
 	// hostname(port)
 	@Value("${ibm.mq.connName}")
 	private String connName;	
+	public String GetConnName() { return this.connName; }
+	public void SetConnName(String val) { this.connName = val; }
+	
 	@Value("${ibm.mq.channel}")
 	private String channel;
+	public String GetChannel() { return this.channel; }
+	public void SetChannel(String val) { this.channel = val; }
+	
 	@Value("${ibm.mq.queue}")
 	private String srcQueue;
 	
 	private int port;
+	public int GetPort() { return this.port; }
+	public void SetPort(int val) { this.port = val; }
 	
 	@Value("${ibm.mq.useCCDT:false}")
 	private boolean useCCDT;
+	public boolean GetCCDT() { return this.useCCDT; }
+	public void SetCCDT(boolean val) { this.useCCDT = val; }
+
 	@Value("${ibm.mq.ccdtFile:missing}")
 	private String ccdtFile;
 
 	@Value("${ibm.mq.user}")
 	private String userId;
+	public String GetUserId() { return this.userId; }
+	public void SetUserId(String val) { this.userId = val; }
+	
 	@Value("${ibm.mq.password}")
 	private String password;
+	public String GetPassword() { return this.password; }
+	public void SetPassword(String val) { this.password = val; }
+	
+	
 	@Value("${ibm.mq.sslCipherSpec}")
 	private String cipher;
 	@Value("${ibm.mq.waitInterval:5000}")
@@ -240,6 +262,16 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 			log.info("Connection to queue manager established ");			
 		}
 
+		
+		return queManager;
+	}
+
+	@Bean("getmessageoptions")
+	@DependsOn("queuemanager")
+	public MQGetMessageOptions CreateGetMessageOptions() throws MQException {
+
+		log.info("Creating get message options");
+
 		this.gmo = new MQGetMessageOptions();
 		this.gmo.options = MQConstants.MQGMO_WAIT 
 				+ MQConstants.MQGMO_FAIL_IF_QUIESCING 
@@ -255,14 +287,22 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		
 		// wait until we get something
 		this.gmo.waitInterval = this.waitInterval;
+		return this.gmo;
+		
+	}
+
+	@Bean("deadletterandopenqueue")
+	@DependsOn({"getmessageoptions","queuemanager"})
+	public MQQueue GetDeadLetterQueueAndOpenQueueForReading() throws MQException {
+
+		log.info("Getting DLQ and Opeing queue for reading");
 
 		this.dlqName = this.queManager.getAttributeString(MQConstants.MQCA_DEAD_LETTER_Q_NAME, 48).trim();
 		this.queue = openQueueForReading(this.srcQueue);
-		//getBackoutQueueDetails(this.queue);
+		return this.queue;
 		
-		return queManager;
 	}
-
+	
 	/*
 	 * Override the onApplicationEvent, so we can create an MQ listener when we know that this
 	 *    object has been fully created
@@ -465,25 +505,29 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 	/*
 	 * Extract connection server and port
 	 */
-	private void validateHostAndPort() {
-		
+	public void validateHostAndPort() {
+		validateHostAndPort(this.useCCDT, this.connName);
+	}
+	
+	public void validateHostAndPort(boolean useCCDT, String conn) {
+
 		/*
 		 * ALL parameter are passed in the application.yaml file ...
 		 *    These values can be overridden using an application-???.yaml file per environment
 		 *    ... or passed in on the command line
 		 */
-		if (this.useCCDT && (!this.connName.equals(""))) {
+		if (useCCDT && (!conn.equals(""))) {
 			log.error("The use of MQ CCDT filename and connName are mutually exclusive");
 			System.exit(MQKafkaConstants.EXIT);
 		}
-		if (this.useCCDT) {
+		if (useCCDT) {
 			return;
 		}
 
 		// Split the host and port number from the connName ... host(port)
-		if (!this.connName.equals("")) {
+		if (!conn.equals("")) {
 			Pattern pattern = Pattern.compile("^([^()]*)\\(([^()]*)\\)(.*)$");
-			Matcher matcher = pattern.matcher(this.connName);	
+			Matcher matcher = pattern.matcher(conn);	
 			if (matcher.matches()) {
 				this.hostName = matcher.group(1).trim();
 				this.port = Integer.parseInt(matcher.group(2).trim());
@@ -502,15 +546,20 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 	/*
 	 * Check the user, if its in the configuration file, pass it in 
 	 */
-	private void validateUser() {
+	public void validateUser() {
+		validateUser(this.userId);
+		
+	}
+	
+	private void validateUser(String userId) {
 
 		// if no use, for get it ...
-		if (this.userId == null) {
+		if (userId == null) {
 			return;
 		}
 		
-		if (!this.userId.equals("")) {
-			if ((this.userId.equals("mqm") || (this.userId.equals("MQM")))) {
+		if (!userId.equals("")) {
+			if ((userId.equals("mqm") || (userId.equals("MQM")))) {
 				log.error("The MQ channel USERID must not be running as 'mqm' ");
 				System.exit(MQKafkaConstants.EXIT);
 			}
@@ -543,29 +592,4 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
     	}
     }
 
-
-    /*
-    @Bean
-    public ScheduledExecutorService threadPool() {
-    	
-	    RejectedExecutionHandler rejectionHandler = new RejectedExecutionHandlerImp();
-	    ThreadFactory threadFactory = Executors.defaultThreadFactory();
-
-	    ThreadPoolExecutor executorPool = new ThreadPoolExecutor(5,5,5,
-	    		TimeUnit.SECONDS, 
-	    		new ArrayBlockingQueue<Runnable>(5), 
-	    		threadFactory, rejectionHandler);
-	    ScheduledExecutorService schedexecutorPool = Executors.newScheduledThreadPool(5); 
-    	return schedexecutorPool;
-    }
-	
-	public class RejectedExecutionHandlerImp implements RejectedExecutionHandler {
-
-		@Override
-		public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
-			//System.out.println("Info: " + r.toString() + " is rejected");
-		}
-		
-	}
-	*/
-}
+ }

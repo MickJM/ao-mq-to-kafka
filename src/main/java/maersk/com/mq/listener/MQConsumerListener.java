@@ -195,30 +195,7 @@ public class MQConsumerListener implements Runnable {
 							}
 						}
 					}
-    				//System.exit(MQKafkaConstants.EXIT);
     			}
-
-            /*
-            } catch (Exception e) {
-                Thread.currentThread().interrupt();
-                log.error("Thread was interrupted, Failed to complete operation");
-                log.error("Exception: " + e.getMessage());
-				try {
-					if (this.conn.isConnected()) {
-						if (msg != null) {
-							sendToDLQ(msg);
-						}
-					}
-					
-				} catch (MQDataException e1) {
-					e1.printStackTrace();
-				} catch (IOException e1) {
-					e1.printStackTrace();
-				} catch (MQException e1) {
-					e1.printStackTrace();
-				}
-            }
-            */
          } 		
 	}
 	
@@ -234,7 +211,6 @@ public class MQConsumerListener implements Runnable {
 			try {
 				Thread.sleep(5000);			
 				this.conn.reConnectToTheQueueManager();
-				//this.queue = this.conn.openQueueForReading();
 				break;
 				
 			} catch (Exception e) {
@@ -284,96 +260,10 @@ public class MQConsumerListener implements Runnable {
 		t.setTopicName(this.topicName);
 		t.setRFH2Headers(rfh2);
 		
-		////Future<Integer> res = this.executor.submit(t);
 		this.executor.submit(t);
 		
-		//int result = res.get();
-		//if (result == 0) {
-		//	successfullSend();
-		//
-		//} else {
-		//	processFailures();
-		//}	
-		
-		//if (result == 0) {
-		//	successfullSend();
-		//} else {
-		//	
-		//}
-		
-		//if (_debug) { try {
-		//	log.info("res : " + res.get());
-		
-		//} catch (InterruptedException | ExecutionException e) {
-			// TODO Auto-generated catch block
-		//	e.printStackTrace();
-		//} }
-		
-		//executor.submit(t);
-		
-		//try {
-		//	successfullSend();
-		//} catch (MQException e) {
-		//	// TODO Auto-generated catch block
-		//	e.printStackTrace();
-		//}
-		
-		/*
-		boolean sim = tru
-		if (sim) {
-			log.info("Sleeping for 2 seconds :" + Thread.currentThread().getName());
-			try {
-				Thread.sleep(2000);
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
-		}
-		*/
-		
-		/*
-		ListenableFuture<SendResult<String,String>> future =
-								kafkaTemplate.send(this.topicName, payload);		
-		
-		future.addCallback(new ListenableFutureCallback<SendResult<String,String>>() {
-			@Override
-			public void onSuccess(SendResult<String,String> sendResult) {		
-				try {
-					successfullSend();
-					
-				} catch (MQException e) {
-					try {
-						rollBack();
-						
-					} catch (MQException e1) {
-						log.error("Unable to commit transaction to MQ after successfully sending messages to Kafka");
-					}
-				}				
-			}
-
-			@Override
-			public void onFailure(Throwable ex) {
-			
-				try {
-					processFailures(ex, msg);
-
-				} catch (MQException e ) {
-					log.warn("Unable to commit message to DLQ : reasonCode " + e.getReason() );
-					log.warn("Message : " + e.getMessage() );
-	
-				} catch (MQDataException e) {
-					log.warn("Unable to commit message to DLQ : reasonCode " + e.getReason() );
-					log.warn("Message : " + e.getMessage() );
-					
-				} catch (IOException e) {
-					log.warn("Unable to commit message to DLQ " );
-					log.warn("Message : " + e.getMessage() );
-				
-				}
-			}
-		});
-		*/
 		if (this._debug) { log.info("************* message is being processed *********************"); }
+		
 	}
 	
 	/*
