@@ -12,6 +12,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,6 +38,8 @@ import com.ibm.mq.constants.MQConstants;
 import com.ibm.mq.headers.MQDataException;
 import com.ibm.mq.headers.MQRFH2;
 
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Tags;
 import maersk.com.kafka.constants.MQKafkaConstants;
 import maersk.com.mq.KafkaProducer;
 import maersk.com.mq.SendToKafkaTask;
@@ -114,7 +117,7 @@ public class MQConsumerListener implements Runnable {
 	public void run() {
 	
 		if (this._debug) { log.info("Starting MQConsumerListener " ); }		
-		if (this._debug) { log.info("Cresting " + this.threadPool + " fixed threadpools" ); }		
+		if (this._debug) { log.info("Creating " + this.threadPool + " fixed threadpools" ); }		
 		this.executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(this.threadPool);
 		
 		running.set(true);
@@ -175,10 +178,6 @@ public class MQConsumerListener implements Runnable {
 	    						log.error("Unhandled MQException : reasonCode " + e.reasonCode );
 	    						log.error("Exception : " + e.getMessage() );
 	    						System.exit(MQKafkaConstants.EXIT);
-	    						//if (this.conn.isConnected()) {
-	    						//	if (msg != null) {
-	    						//		sendToDLQ(msg);
-	    						//	}
 	    						}
     						}
     					}
@@ -253,14 +252,13 @@ public class MQConsumerListener implements Runnable {
 		//Try getting the RFH2 details from the properties on the MQmessage
 		// ... probably not the best way, but works for this ..
 		Map rfh2 = getRFHProperties(msg);
+		SendToKafkaTask sendToKafkaTask = new SendToKafkaTask(payload);
+		sendToKafkaTask.setKafkaTemplate(this.kafkaTemplate);
+		sendToKafkaTask.setMQConnection(this.conn);
+		sendToKafkaTask.setTopicName(this.topicName);
+		sendToKafkaTask.setRFH2Headers(rfh2);
 		
-		SendToKafkaTask t = new SendToKafkaTask(payload);
-		t.setKafkaTemplate(this.kafkaTemplate);
-		t.setMQConnection(this.conn);
-		t.setTopicName(this.topicName);
-		t.setRFH2Headers(rfh2);
-		
-		this.executor.submit(t);
+		this.executor.submit(sendToKafkaTask);
 		
 		if (this._debug) { log.info("************* message is being processed *********************"); }
 		
@@ -303,23 +301,7 @@ public class MQConsumerListener implements Runnable {
 		this.conn.commit();
 	}
 	
-	
-	/*
-	 * failure, rollback
-	 */
-	protected synchronized void processFailures(Throwable ex, MQMessage msg) throws MQDataException, IOException, MQException {
-		if (_debug) { log.error("Unable to send message to Kafka : " + ex.getMessage()); }	
-		rollBack();
-	}
-	protected synchronized void processFailures(Throwable ex) throws MQDataException, IOException, MQException {
-		if (_debug) { log.error("Unable to send message to Kafka : " + ex.getMessage()); }	
-		rollBack();
-	}
-	protected synchronized void processFailures() throws MQException {
-		if (_debug) { log.error("Unable to send message to Kafka " ); }	
-		rollBack();
-	}
-
+		
 	/*
 	 * failure, rollback
 	 */	

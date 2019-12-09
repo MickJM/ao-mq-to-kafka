@@ -2,7 +2,11 @@ package maersk.com.mq.listener;
 
 import java.io.IOException;
 import java.net.URL;
+import java.util.HashMap;
 import java.util.Hashtable;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionHandler;
@@ -10,8 +14,10 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -41,12 +47,22 @@ import com.ibm.mq.headers.MQDataException;
 import com.ibm.mq.headers.MQHeaderList;
 import com.ibm.mq.headers.MQRFH2;
 
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.Meter.Id;
 import maersk.com.kafka.constants.MQKafkaConstants;
 import maersk.com.mq.KafkaProducer;
 
 
 @Component
 public class MQConnection implements ApplicationListener<ContextRefreshedEvent> {
+
+	//@Autowired
+	//public MeterRegistry meterRegistry;
+
+    private Map<String,AtomicInteger>errors = new HashMap<String,AtomicInteger>();
 
 	private Logger log = Logger.getLogger(this.getClass());
 
@@ -154,19 +170,25 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		return this.backoutQueue;
 	}
 	
-
 	public MQConnection() {
 	}
 
+	/*
+	 * Is there a connection to the queue manager ?
+	 */
 	public boolean isConnected() {
 		return this.queManager.isConnected();
 	}
+	
 	/*
 	 * Called from MQConsumerListener to reconnect to the queue manager
 	 */
 	public void reConnectToTheQueueManager() throws MQException, MQDataException, Exception {
+		
+		setMetrics(0);		
 		this.queManager = createQueueManagerConnection();
 	}
+	
 	
 	/*
 	 * Create an MQ queue manager object
@@ -262,6 +284,7 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 			log.info("Connection to queue manager established ");			
 		}
 
+		setMetrics(MQConstants.MQQMSTA_RUNNING);
 		
 		return queManager;
 	}
@@ -285,7 +308,7 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 				this.gmo.options += MQConstants.MQGMO_PROPERTIES_FORCE_MQRFH2;
 		}
 		
-		// wait until we get something
+		// wait 'x' milli-seconds until we get something
 		this.gmo.waitInterval = this.waitInterval;
 		return this.gmo;
 		
@@ -404,6 +427,9 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		return msg;
 	}
 	
+	/*
+	 * Close the BOQ
+	 */
 	public void closeQueue() {
 		try {
 			this.boqQueue.close();
@@ -413,10 +439,9 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		this.boqQueue = null;
 	}
 
-	public void begin() throws MQException {
-		this.queManager.begin();
-	}
-	
+	/*
+	 * Commit or rollback
+	 */
 	public void commit() throws MQException {
 		this.queManager.commit();
 	}
@@ -430,10 +455,18 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 	 */
 	public void writeMessageToBackoutQueue(MQMessage message) throws MQDataException, IOException{
 
+		/*
+		 * Set MQ PutMessageOptions (PMO), expiry type and persistence
+		 */
 		MQPutMessageOptions pmo = new MQPutMessageOptions();	
-		pmo.options = MQConstants.MQPMO_NEW_MSG_ID + MQConstants.MQPMO_FAIL_IF_QUIESCING;
+		pmo.options = MQConstants.MQPMO_NEW_MSG_ID 
+				+ MQConstants.MQPMO_FAIL_IF_QUIESCING;
 		message.expiry = MQKafkaConstants.UNLIMITED_EXPIRY;
-		//MQQueue boqQueue = null;
+		message.persistence = MQConstants.MQPER_PERSISTENT;
+
+		/*
+		 * Open the BOQ and try to write the message, if it fails, try to send to DLQ
+		 */
 		try {
 			if (this.boqQueue == null) { 
 				this.boqQueue = openQueueForWriting(this.backoutQueue);
@@ -462,10 +495,18 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 	 */
 	public void writeMessageToDLQ(MQMessage message) throws MQDataException, IOException {
 
+		/*
+		 * Set MQ PutMessageOptions (PMO), expiry type and persistence
+		 */
 		MQPutMessageOptions pmo = new MQPutMessageOptions();	
-		pmo.options = MQConstants.MQPMO_NEW_MSG_ID + MQConstants.MQPMO_FAIL_IF_QUIESCING;
+		pmo.options = MQConstants.MQPMO_NEW_MSG_ID 
+				+ MQConstants.MQPMO_FAIL_IF_QUIESCING;
 		message.expiry = MQKafkaConstants.UNLIMITED_EXPIRY;
-
+		message.persistence = MQConstants.MQPER_PERSISTENT;
+		
+		/*
+		 * Try writing to DLQ
+		 */
 		try {
 			if (this.dlqQueue == null) {
 				this.dlqQueue = openQueueForWriting(this.dlqName);
@@ -489,15 +530,16 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 	 * Create an MQConnection listener object to process MQ messages
 	 */
 	protected void createMQListenerObject() {
-		if (this._debug) {log.info("Creating MQ Listener object ...."); }
+		if (this._debug) {log.info("Creating MQConsumerListener object ...."); }
 		this.listener = new MQConsumerListener();
 		this.listener.setConnection(this, this.maxAttempts);
 		this.listener.setKafkaTemplate(this.kafkaTemplate);
 		this.listener.setTopicName(this.topicName);
 		this.listener.setDebug(this._debug);
 		this.listener.setThreadPool(this.threadPool);
+
 		this.listener.start();
-		if (this._debug) {log.info("MQ Listener started ...."); }
+		if (this._debug) {log.info("MQConsumerListener started ...."); }
 		
 	}
 	
@@ -550,7 +592,6 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		validateUser(this.userId);
 		
 	}
-	
 	private void validateUser(String userId) {
 
 		// if no use, for get it ...
@@ -567,6 +608,25 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 			this.userId = null;
 			this.password = null;
 		}		
+	}
+
+	/*
+	 * Are we connected to a queue manager ?
+	 */
+	private void setMetrics(int val) {
+		
+		AtomicInteger err = errors.get("ConnectedToQueueManager");
+		if (err == null) {    			
+			errors.put("QueueManager"
+					,Metrics.gauge(new StringBuilder()
+					.append("mq:")
+					.append("QueueManagerStatus").toString(), 
+					Tags.of("name", this.queueManager)
+					, new AtomicInteger(val)));
+			
+		} else {
+			err.set(val);
+		}
 	}
 	
 	/*

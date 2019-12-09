@@ -26,6 +26,9 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+/*
+ * Kafka Producer
+ */
 @Component
 public class KafkaProducer {
 

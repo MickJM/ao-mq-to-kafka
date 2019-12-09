@@ -19,6 +19,9 @@ import com.ibm.mq.headers.MQDataException;
 
 import maersk.com.mq.listener.MQConnection;
 
+/*
+ * Task to send messages to Kafka
+ */
 public class SendToKafkaTask implements Callable<Integer> {
 
 	private Logger log = Logger.getLogger(this.getClass());
@@ -53,8 +56,6 @@ public class SendToKafkaTask implements Callable<Integer> {
 	
 	@Override
 	public Integer call() throws Exception {
-
-		this.ret = 0;
 
 		/*
 		 * if we have a key on the rfh2, then use it, otherwise dont

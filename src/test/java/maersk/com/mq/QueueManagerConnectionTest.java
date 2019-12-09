@@ -75,8 +75,9 @@ public class QueueManagerConnectionTest {
 
 	@Before
 	public void SetVariables() {
-		this.connName = "localhost(1442)";
-		this.queueManager = "QMAP01";
+		this.connName = System.getenv("TEST_HOST");
+		this.queueManager = System.getenv("TEST_HOST");
+		
 	}
 	
 	@Test
@@ -92,7 +93,7 @@ public class QueueManagerConnectionTest {
 	@Test
 	public void HostAndPortTest() {
 		boolean useCCDT = false;
-		
+
 		MQConnection conn = new MQConnection();
 		conn.validateHostAndPort(useCCDT, this.connName);
 		
@@ -104,20 +105,18 @@ public class QueueManagerConnectionTest {
 		
 	}
 	
-	
-	
 	@Test
-	public void CreateQueueManagerTest() {
+	public void ConnectToQueueManagerTest() {
 		boolean useCCDT = false;
 		
 		MQConnection conn = new MQConnection();
-		conn.SetConnName(this.connName);
+		conn.SetConnName(System.getenv("TEST_CONNAME"));
 		conn.validateHostAndPort();
-		conn.SetUserId("MQMon01");
-		conn.SetPassword("Passw0rd");
-		conn.SetChannel("MQ.MONITOR.SVRCONN");
-		conn.SetQueueManagerName("QMAP01");
-		
+		conn.SetUserId(System.getenv("TEST_USERID"));
+		conn.SetPassword(System.getenv("TEST_PASSWORD"));
+		conn.SetChannel(System.getenv("TEST_CHANNEL"));
+		conn.SetQueueManagerName(System.getenv("TEST_QMGR"));
+
 		MQQueueManager qm = null;
 		try {
 			qm = conn.createQueueManagerConnection();
@@ -134,6 +133,8 @@ public class QueueManagerConnectionTest {
 		}
 		
 		assertTrue("Queue manager failed", qm != null);
+		assertTrue("Not connected to queue manager", qm.isConnected());
+		
 		conn.closeQMConnection();
 		
 	}
