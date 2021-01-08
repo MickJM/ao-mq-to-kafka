@@ -1,4 +1,4 @@
-package maersk.com.mq;
+package app.com.mq;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;

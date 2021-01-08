@@ -1,4 +1,4 @@
-package maersk.com.mq;
+package app.com.mq;
 
 import java.io.IOException;
 import java.util.Map;
@@ -17,7 +17,7 @@ import com.ibm.mq.MQException;
 import com.ibm.mq.MQMessage;
 import com.ibm.mq.headers.MQDataException;
 
-import maersk.com.mq.listener.MQConnection;
+import app.com.mq.listener.MQConnection;
 
 /*
  * Task to send messages to Kafka

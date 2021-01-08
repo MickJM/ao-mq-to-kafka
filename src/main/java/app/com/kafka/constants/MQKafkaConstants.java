@@ -1,4 +1,4 @@
-package maersk.com.kafka.constants;
+package app.com.kafka.constants;
 
 import org.apache.log4j.Logger;
 

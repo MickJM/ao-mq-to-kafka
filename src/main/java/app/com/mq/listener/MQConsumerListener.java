@@ -1,4 +1,4 @@
-package maersk.com.mq.listener;
+package app.com.mq.listener;
 
 import java.io.File;
 import java.io.IOException;
@@ -46,11 +46,11 @@ import com.ibm.mq.constants.MQConstants;
 import com.ibm.mq.headers.MQDataException;
 import com.ibm.mq.headers.MQRFH2;
 
+import app.com.kafka.constants.MQKafkaConstants;
+import app.com.mq.KafkaProducer;
+import app.com.mq.SendToKafkaTask;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Tags;
-import maersk.com.kafka.constants.MQKafkaConstants;
-import maersk.com.mq.KafkaProducer;
-import maersk.com.mq.SendToKafkaTask;
 
 @Component
 public class MQConsumerListener implements Runnable {

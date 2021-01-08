@@ -1,4 +1,4 @@
-package maersk.com.mq.listener;
+package app.com.mq.listener;
 
 import java.io.IOException;
 import java.net.URL;
@@ -47,13 +47,13 @@ import com.ibm.mq.headers.MQDataException;
 import com.ibm.mq.headers.MQHeaderList;
 import com.ibm.mq.headers.MQRFH2;
 
+import app.com.kafka.constants.MQKafkaConstants;
+import app.com.mq.KafkaProducer;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Meter.Id;
-import maersk.com.kafka.constants.MQKafkaConstants;
-import maersk.com.mq.KafkaProducer;
 
 
 @Component

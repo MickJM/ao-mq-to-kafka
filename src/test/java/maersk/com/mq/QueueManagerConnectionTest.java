@@ -18,7 +18,7 @@ import com.ibm.mq.MQException;
 import com.ibm.mq.MQQueueManager;
 import com.ibm.mq.headers.MQDataException;
 
-import maersk.com.mq.listener.MQConnection;
+import app.com.mq.listener.MQConnection;
 
 //@RunWith(SpringRunner.class)
 @SpringBootTest
