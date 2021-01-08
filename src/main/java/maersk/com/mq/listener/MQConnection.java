@@ -144,6 +144,10 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 	@Value("${kafka.dest.threadpool:1}")
 	private int threadPool;
 	
+	@Value("${ibm.mq.deserialize:}")
+	private String deserialize;
+
+	
 	private String dlqName;
 	
 	private static MQQueue dlqQueue = null;
@@ -189,12 +193,52 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		this.queManager = createQueueManagerConnection();
 	}
 	
+	/*
+	 * Create queue manager connection
+	 */
+	@Bean("queuemanager")
+	public MQQueueManager createQueueManager() {
+		
+		//MQQueueManager qm = null;
+		Boolean notConnected = true;
+		int connectionAttempts = 0;
+		
+		while (notConnected) {
+			
+			connectionAttempts++;
+			
+			try {
+				this.queManager = createQueueManagerConnection();
+				notConnected = false;
+				
+			} catch (MQException e) {
+				log.error("Unable to connect to MQ server ... CompleteCode=" + e.completionCode + " ReasonCode=" + e.getReason() + " ... retrying");
+			} catch (Exception e) {
+				log.error("Unable to connect to MQ server ... " + e.getMessage() + " ... retrying");
+			}
+
+			if (notConnected) {
+				try {
+					Thread.sleep(5000);
+				} catch (InterruptedException e) {
+				}
+			}
+			if (connectionAttempts > 3) {
+				log.error("Unable to connect to MQ server ... number if attempts exchausted");
+				notConnected = false;
+			}
+		}
+		
+		return queManager;
+	}
 	
 	/*
 	 * Create an MQ queue manager object
 	 */
-	@Bean("queuemanager") 
-	public MQQueueManager createQueueManagerConnection() throws MQException, MQDataException, Exception {
+	//@Bean("queuemanager") 
+	private MQQueueManager createQueueManagerConnection() throws MQException, MQDataException, Exception {
+		
+		MQQueueManager qm = null;
 		
 		validateHostAndPort();
 		validateUser();
@@ -274,19 +318,19 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		
 		if (!this.useCCDT) {
 			log.info("Attempting to connect to queue manager " + this.queueManager);
-			this.queManager = new MQQueueManager(this.queueManager, env);
+			qm = new MQQueueManager(this.queueManager, env);
 			log.info("Connection to queue manager established ");
 			
 		} else {
 			URL ccdtFileName = new URL("file:///" + this.ccdtFile);
 			log.info("Attempting to connect to queue manager " + this.queueManager + " using CCDT file");
-			this.queManager = new MQQueueManager(this.queueManager, env, ccdtFileName);
+			qm = new MQQueueManager(this.queueManager, env, ccdtFileName);
 			log.info("Connection to queue manager established ");			
 		}
 
 		setMetrics(MQConstants.MQQMSTA_RUNNING);
 		
-		return queManager;
+		return qm;
 	}
 
 	@Bean("getmessageoptions")
@@ -537,7 +581,8 @@ public class MQConnection implements ApplicationListener<ContextRefreshedEvent> 
 		this.listener.setTopicName(this.topicName);
 		this.listener.setDebug(this._debug);
 		this.listener.setThreadPool(this.threadPool);
-
+		this.listener.setDeserialise(this.deserialize);
+		
 		this.listener.start();
 		if (this._debug) {log.info("MQConsumerListener started ...."); }
 		

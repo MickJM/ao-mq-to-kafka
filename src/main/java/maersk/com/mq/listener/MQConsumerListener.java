@@ -1,7 +1,15 @@
 package maersk.com.mq.listener;
 
+import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -46,6 +54,17 @@ import maersk.com.mq.SendToKafkaTask;
 
 @Component
 public class MQConsumerListener implements Runnable {
+
+	private String deserialize;
+	public void setDeserialise(String val) {
+		this.deserialize = val;
+	}
+	private boolean loadDeserializer = false;
+	private Class<?> clazz = null;
+	private Object instance = null;
+	
+	@Value("${ibm.mq.serialize:}")
+	private String serialize;
 
 	private Logger log = Logger.getLogger(this.getClass());
 	private Thread worker;
@@ -226,7 +245,7 @@ public class MQConsumerListener implements Runnable {
 	 * Send messages async to Kafka 
 	 */
 	private void sendAsyncToKafka(MQMessage msg) throws MQException {
-		
+			
 		try {
 			sendMessageToKafka(msg);
 			
@@ -234,6 +253,8 @@ public class MQConsumerListener implements Runnable {
 			log.error("Unable to successfully process async request");
 			rollBack();
 		}
+	
+		
 	}
 	
 	/*
@@ -246,7 +267,12 @@ public class MQConsumerListener implements Runnable {
 
 		String payload = new String(message);
 		if (_debug) { log.info("msg : " + payload); }
-		
+
+		if (!this.loadDeserializer) {
+			LoadDeserializer();
+		}
+		DeserializeThePayload(payload);
+
 		// https://stackoverflow.com/questions/23681822/using-spring-4-0s-new-listenablefuture-with-callbacks-odd-results
 		
 		//Try getting the RFH2 details from the properties on the MQmessage
@@ -257,8 +283,9 @@ public class MQConsumerListener implements Runnable {
 		sendToKafkaTask.setMQConnection(this.conn);
 		sendToKafkaTask.setTopicName(this.topicName);
 		sendToKafkaTask.setRFH2Headers(rfh2);
-		
-		this.executor.submit(sendToKafkaTask);
+	
+	// uncomment this line 
+	//	this.executor.submit(sendToKafkaTask);
 		
 		if (this._debug) { log.info("************* message is being processed *********************"); }
 		
@@ -294,6 +321,68 @@ public class MQConsumerListener implements Runnable {
 	}
 
 	/*
+	 * Load the deserialiser object
+	 */
+	private void LoadDeserializer() {
+				if (!this.loadDeserializer)
+		{
+			this.loadDeserializer = true;
+			if (this.deserialize != null) {
+				log.info("Loading deserializer class: " + this.deserialize);				
+				ClassLoader cl = this.getClass().getClassLoader();
+				
+				try {
+					this.clazz = cl.loadClass(this.deserialize);
+					this.instance = clazz.getConstructor().newInstance();
+				
+				} catch (ClassNotFoundException e) {
+					log.error("Class not found");
+					e.printStackTrace();
+				} catch (InstantiationException e) {
+					log.info("Intantitation");
+					e.printStackTrace();
+				} catch (IllegalAccessException e) {
+					log.info("Illigal access");
+					e.printStackTrace();
+				} catch (IllegalArgumentException e) {
+					log.info("Illegal argument");
+					e.printStackTrace();
+				} catch (InvocationTargetException e) {
+					log.info("InvocationTarget");
+					e.printStackTrace();
+				} catch (NoSuchMethodException e) {
+					log.info("Nosuch method");
+					e.printStackTrace();
+				} catch (SecurityException e) {
+					log.info("Security");
+					e.printStackTrace();
+				}
+			}
+		}
+	}
+	
+	/*
+	 * Invoke the 'Deserialize' mothod and pass in the message from the queue
+	 */
+	private void DeserializeThePayload(String payload) {
+
+		if (this.deserialize != null) {
+			try {
+				Field field = this.clazz.getDeclaredField("payload");
+				field.setAccessible(true);
+				field.set(this.instance, payload);				
+				this.clazz.getMethod("Deserialize").invoke(this.instance);
+				
+			} catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException | NoSuchMethodException
+					| SecurityException | NoSuchFieldException e) {
+				log.info("Error invoking Deserialized method");
+				e.printStackTrace();
+			}
+		}
+		
+	}
+	
+	/*
 	 * Message was successfully sent to Kafka, so commit the messages from the queue
 	 */
 	protected synchronized void successfullSend() throws MQException {
@@ -328,5 +417,6 @@ public class MQConsumerListener implements Runnable {
 		this.conn.commit();
 		
 	}
+
 	
 }

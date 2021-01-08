@@ -119,14 +119,15 @@ public class QueueManagerConnectionTest {
 
 		MQQueueManager qm = null;
 		try {
-			qm = conn.createQueueManagerConnection();
-			
+			qm = conn.createQueueManager();
+
+			/*
 		} catch (MQException e) {
 			log.info("Error: " + e.getMessage());
 			
 		} catch (MQDataException e) {
 			log.info("Error: " + e.getMessage());
-			
+			*/
 		} catch (Exception e) {
 			log.info("Error: " + e.getMessage());
 			
